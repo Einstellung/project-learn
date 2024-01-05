@@ -46,11 +46,7 @@ pub fn word_to_polyhash(word: &str) -> u64 {
 
 接下来是Zk Wordle的约束电路设计，主要内容在`wordle.rs`文件中。我们首先来看一下整体约束电路结构（我假设正确的单词是“fluff”，而用户输入的单词是"fault"）。
 
-<div align="center">
-<img src="https://user-images.githubusercontent.com/6984346/178630626-65108409-9fbf-4f08-bca6-66b4fa426fff.png"  height = "600" alt="图片名称" align=center />
-</div>
-
-![](https://github.com/Einstellung/project-learn/blob/main/zordle/circuit.png)
+![circuit](https://github.com/Einstellung/project-learn/assets/26652483/5f96ae5a-2d2e-439b-8b5f-2e2562a5e0f3)
 
 图中的Advice其实是11列，不过为了图表不过于太大便于展示，我将原本5列的char折叠只选取第一列和最后一列，color_is_zero列也同样如此。图中类似big或者inv不是表示cell中填入的是字母，而是真实数据，因为数值比较大，完整展示会导致图表比较难以展示，所以用big或者inv来代替。
 
