@@ -1,149 +1,176 @@
-# Zordle: ZK Wordle
+### Zk  Wordle 介绍
 
-Zordle is [Wordle](https://www.nytimes.com/games/wordle/index.html), but with zero-knowledge proofs. Zordle uses ZK proofs to prove that a player knows words that map to their shared grid, but does not reveal those words to a verifier. Zordle is probably the first end-to-end web app built using [Halo 2](https://github.com/zcash/halo2/) ZK proofs!
+zk wordle是使用零知识证明的办法构建wordle的程序。wordle是一个小游戏，游戏规则是用户有6次机会输出5个字母排列组成的单词，后台会将用户输入的单词和正确的单词进行匹配。如果输入的字母位置和正确单词的位置相同，那么就会给出绿色标识符，如果用户输入的单词字母在正确单词的某个字母匹配，但是位置可能不一致，这时候就会给出黄色标识符。游戏的胜利机制就是结合之前的绿色和黄色标识提示，在6次机会以内找到正确的单词。
 
-This project was made as part of [0xPARC Halo 2 Learning Group](https://0xparc.org/blog/halo2-learning-group). Big shoutout to [Ying Tong](https://twitter.com/therealyingtong) for basically hand-holding me through Halo2 circuit writing and to [Uma](https://twitter.com/pumatheuma) and [Blaine](https://twitter.com/BlaineBublitz) for significant work on porting the Halo 2 library to WASM.
+<div align="center">
+<img src="https://user-images.githubusercontent.com/6984346/178630626-65108409-9fbf-4f08-bca6-66b4fa426fff.png"  height = "600" alt="图片名称" align=center />
+</div>
 
-# [✨Demo: Live at zordle.xyz ✨](https://zordle.xyz/)
+假如说你成功找到了某个正确的单词，想向你的朋友炫耀一下。你的朋友可能会对此提出质疑。这个时候你为了打消他的质疑就需要向他证明你确实找到了某个正确单词。最简单的办法就是你直接告诉他正确的单词是什么，这样朋友就可以用这个你说的单词去实际验证一下是否真的正确。
 
-https://user-images.githubusercontent.com/6984346/178832179-f9ae5ca5-e271-49b5-84ba-848fcd970b45.mov
+但是这样一来，你相当于泄密了，你的朋友可能之前已经绞尽脑汁尝试了很多次都找不到正确的单词到底是什么，你告诉他这样他知道了，他就可以再别的朋友炫耀说自己找到正确单词（虽然实际上是你告诉他的，但他可能不会告诉别人）。那么有没有什么办法你在不泄露正确单词的情况下依旧向他证明你确实知道正确的单词是什么呢？
 
+答案就是使用零知识证明这项技术。本文接下来就会具体介绍该如何设计和构建这样的证明。现在网络上已经有很多不同版本的使用零知识证明构建zk wordle的项目，接下来我要分析的是使用Halo2设计构建的项目，该项目地址在：https://github.com/nalinbhardwaj/zordle
 
-# Motivation and user flow
+### 数据处理
 
-Earlier this year, Wordle became one of the most popular word games, with millions logging on every day to attempt the day's Wordle and share their successes with friends and social media. Wordle's popularity was primarily driven by a really simple to share grid:
+`dict.rs`文件里面包含一个非常巨大的数组，里面是经过处理的数据，数据源自`dict.json`文件。将5个字母的单词经过自定义的hash运算之后转成数字。方便将来在约束电路中进行约束，来保证用户输入的5个字母能够组成单词。自定义hash运算格式如下：
+```rust
+pub fn word_to_chars(word: &str) -> Vec<u64> {
+    let mut res = vec![];
+    for c in word.chars() {
+        res.push((c as u64) - ('a' as u64) + 1);
+    }
+    res
+}
 
-<img src="https://user-images.githubusercontent.com/6984346/178630626-65108409-9fbf-4f08-bca6-66b4fa426fff.png" width="32%" />
+pub fn word_to_polyhash(word: &str) -> u64 {
+    let chars = word_to_chars(word);
+    let mut hash = 0;
+    for c in chars {
+        hash = hash * BASE;
+        hash += c;
+    }
 
-_At some point, my only form of communication with some of my friends was Wordle grid exchanges_
+    hash
+}
+```
 
-However, the ease of sharing these emoji boxes came with an unfortunate flaw: A player could just edit their grid after the game and make themselves seem much smarter than they originally were. I was always suspicious if my friends _really_ got the scores they claimed or not. ZK SNARKs to the rescue! 🤓
+我们还需要用到`compute_diff`函数，他的主要作用是比较输入的单词和正确的单词之间的差异（这些单词都会经过`word_to_char`处理，所以实际上是比较数字之间的差异），然后放进数组里面。举一个例子，比如正确的单词是“fluff"，用户输入的单词是“fault”，那么"fluff"经过`word_to_char`处理之后是[6,12,21,6,6]，“fault”是[6,1,21,12,20]，`compute_diff`输出会是[[1,0,1,0,0], [1,0,1,1,0]\]
+该数组的第一项是`green`项，也就是字母正确同时位置正确，用1表示。其余用0。数组第二项是`yellow`项，1表示该字母在正确单词的字母中，不关心位置是否正确。0表示该字母在正确的单词中未曾出现。
 
-In Zordle, after solving the day's Wordle, a user additionally generates a ZK proof attesting that they know the set of words that perfectly correspond to a set of emoji boxes that they're sharing![^1]
+下面简单介绍一下整个数据处理流程。
+首先用户有6次机会输入单词，然后用上面介绍的方法，把单词转成hash数组和`word_to_char`数组，再同真正正确的单词数组`final_char`做比较，用于生成green和yellow项（使用`compute_diff`），这两项数据最终会输入到instance中。用于circuit电路的`word_diffs_green`和`word_diffs_yellow`数据与`green`和`yellow`项类似，只不过没有经过0和1的二值化处理，还保留原始的结果。
 
-[^1]: Ignore the minor technical detail that they can always just cheat by looking up the day's word elsewhere. 😅
+### 约束电路
 
-Learning about the shiny new features of Halo 2, Wordle seemed like a cool toy application to get my hands dirty with the library, so I chose to work on this as my learning group project! The rest of this README will be a technical note on the circuits and an informal introduction to the Halo 2 Library and features of PLONKish proving systems.
+接下来是Zk Wordle的约束电路设计，主要内容在`wordle.rs`文件中。我们首先来看一下整体约束电路结构（我假设正确的单词是“fluff”，而用户输入的单词是"fault"）。
 
-# Circuit
+<div align="center">
+<img src="https://user-images.githubusercontent.com/6984346/178630626-65108409-9fbf-4f08-bca6-66b4fa426fff.png"  height = "600" alt="图片名称" align=center />
+</div>
 
-The over-simplified mental model of Halo 2 I've come to appreciate is that of a giant spreadsheet: You have cells in a tabular format you can fill values in, mutate the values from cell to cell, and check that relationships and constraints you'd desire hold. Additionally, you have access to some "global" structures that are more powerful than just plain cell relationship comparators: you can check if row A is a permutation of row B for a very cheap cost, and its also very cheap to check set membership of the value of a particular cell in a giant list (as long as you can define said giant list at "compile time").
+![](https://github.com/Einstellung/project-learn/blob/main/zordle/circuit.png)
 
-<img width="1187" alt="Muse MuseBoard 2022-07-13 11 37 57" src="https://user-images.githubusercontent.com/6984346/178774262-4e87557c-e66d-4d90-b3bd-94100bcafc49.png">
+图中的Advice其实是11列，不过为了图表不过于太大便于展示，我将原本5列的char折叠只选取第一列和最后一列，color_is_zero列也同样如此。图中类似big或者inv不是表示cell中填入的是字母，而是真实数据，因为数值比较大，完整展示会导致图表比较难以展示，所以用big或者inv来代替。
 
+接下来具体分析一下图表。其中Instance部分比较容易，我们在前一部分数据处理中已经做过分析。接下来分析Advice部分。
 
-To be slightly more precise, Halo 2 essentially structures circuits as row-column operations. There are 4 primary types of columns:
+我们来横向的分析每一个row，首先是第零行`words`部分。poly_word部分是使用自定义的hash算法来对输入的单词("fault")处理之后的结果。后面是经过`word_to_char` 处理过后的单词数值表示。
 
-- Instance columns: these are best associated with public inputs,
-- Advice columns: these are best associated with private inputs and the computation trace of the circuit, the "witness",
-- Fixed columns: constants used in the computation, known at "compile time" and,
-- Selector columns: these are binary values used to "select" particular advice and instance cells and define constraints between them.
+第一行`final_words`填入正确单词的数值表示。
 
-Additionally, there's the notion of a lookup column that allows you to check set membership efficiently but that's perhaps best thought of as a giant fixed set instead of a circuit table column.
+第二行 `diff_g`是将之前数据处理部分的`word_diffs_green`数据填入，第三行`diff_y`也是同样的，将`word_diffs_yellow`数据填入。
 
-Of course, the natural question, given this abstraction, is to figure out what's the right way to write efficient ZK circuits inside this playground? Should I use more rows? Or more columns? The answer is quite complicated.
+第四行`diff_g_is_zero`和第五行`diff_y_is_zero`是对`word_diffs_green`和`word_diffs_yellow`数据做二值化处理，然后填入。最终的结果应该要和instance中的`green`和`yellow`项一致。
 
-For simpler schemes like [Groth16 that are based on R1CS](https://eprint.iacr.org/2016/260.pdf), circuit engineers have universally accepted the metric of "the number of constraints" since most tasks associated with the ZK proof (compilation, proving time, trusted setup compute etc.) scale linearly with the number of non-linear constraints. The structure of PLONK circuits, on the other hand, allows for much more flexibility in defining a circuit, and with it comes a very tough-to-grasp cost model. There are some rough heuristics. For instance, more rows make proving time slower (notably, however, the big jump in proving times occurs when the number of rows crosses powers of 2, where the time cost of the intermediate polynomial FFTs required doubles) while more columns make verification time slower. Notably, also, Halo 2, the library, is very flexible and allows for the instantiation of circuits using different polynomial commitment schemes (such as [IPA](https://eprint.iacr.org/2020/499.pdf#page=49) and [KZG](https://dankradfeist.de/ethereum/2020/06/16/kate-polynomial-commitments.html)) which makes cost-modelling instantiation dependent as well.
+第六行`color_green`和第七行`color_yellow`是将Instance列的`green`和`yellow`分别填入。
 
-The abstraction of a spreadsheet for PLONKish arithmetisation is quite powerful because it allows the library to lay out and pack the rows and columns of your circuit tighter automatically (and paves the way for an IR/automated circuit optimiser long term). While great for optimizations, unfortunately, this ability to auto-pack comes at the expense of making the API more nuanced and makes the cost modelling of circuits even more non-trivial to a circuit programmer.
+Advice列的`color_is_zero`项分别来自`diff_g`和`diff_y`的数据做inv处理，至于为什么数据会填在`diff_g_is_zero`和`diff_y_is_zero`行是来自如下代码设置：
+```rust
+diffs_green_is_zero_chips[i].assign(&mut region, 4, diffs_green[i])?;
+diffs_yellow_is_zero_chips[i].assign(&mut region, 5, diffs_yellow[i])?;
+```
 
-To elaborate on the _nuance_ of the API, Halo 2 defines the concept of a "region" inside the spreadsheet. A region is the minimal set of cells such that all constraints relating to any one of them are contained entirely within this region. This is a mouthful, but in essence, regions are the minimal building blocks of a circuit. Typically, even non-ZK apps are written in disparate modules - a good analogy for this is perhaps the Clock app on your mobile phone: the app is structured coherently to a user (around "time") but if you think about it like a programmer, the timer tab has very little in common with the world clock tab. The same is true for ZK circuits, a Clock circuit might want to check both the world clock and the status of a timer, and the representation of each of these is its own "region" in the Clock circuit, independent of each other. In the Halo 2 setup, a programmer will write both of them almost independently, and let the compiler figure out the best way to "pack" them into the spreadsheet.
+下面我们看一下整个电路的约束是如何设计的。
 
-![image0](https://user-images.githubusercontent.com/6984346/178660515-0d5b74ae-a7e6-4973-b5f3-fb174e305991.jpg)
-_The concept of "time" is coherent to a user, but the world clock and the timer are disparate modules to a programmer_
+首先是查表约束，用于约束输入的单词是有效的单词而不是乱输入的字母。该约束表在`table`中，是一个非常巨大的表。
+```rust
+let table = DictTableConfig::configure(meta);
 
-While cost-modelling seems to be quite problematic for circuit writers on the surface with the Halo 2 library set up right now, the general read of participants in the Halo 2 Learning Group seems to be that these APIs give circuit writers enough breathing room to hyper-optimise computation for commonly used primitive circuits, and in future, these efficient primitives can be composed (perhaps inefficiently) into real apps by higher-level circuit writers. Hopefully, eventually, ZK circuits will get to a point where a few low-level programmers will hyper-optimise a minimal instruction set, and the rest of us will just roll our circuits into compilers composing and optimising circuits on those instruction sets.[^2]
+meta.lookup(|meta| {
+	let q_lookup = meta.query_selector(q_input);
+	let poly_word = meta.query_advice(poly_word, Rotation::cur());
 
-[^2]: Supposedly, this will also mark the switching point where we can stop bothering with hyper-optimised zkEVMs and instead just write a zkMIPS machine for all VMs. Some notes on this tradeoff [here](https://kelvinfichter.com/pages/thoughts/hybrid-rollups/).
+	vec![(q_lookup * poly_word, table.value)] // check if q_lookup * value is in the table.
+});
+```
 
-It's certainly fun to theorise about the future of ZK circuit writing, but right now, we have a very real task at hand: making an anti-cheat that doesn't really work for a meaningless word game that's not even popular anymore 🤡. And the only way to write these circuits is to delve into the weeds and think about this spreadsheet and its regions and whatnot as a "low-level" programmer.
+接下来是“range check”约束，用于约束输入的word确实是26个英文字母输入，因为``
+`word_to_char`计算会+1，所以实际上是从1开始遍历。
+```rust
+meta.create_gate("character range check", |meta| {
+	let q = meta.query_selector(q_input);
+	let mut constraints = vec![];
+	for idx in 0..WORD_LEN {
+		let value = meta.query_advice(chars[idx], Rotation::cur());
 
-First, let's quickly formalise our public/private inputs:
-
-### Public inputs
-
-- The solution word
-- The grid of boxes of 6 words x 5 slots (one for each letter): each cell in the grid is either green, yellow or grey
-
-### Private inputs
-
-- 6 words of 5 letters each
-
-For starters, observe that Wordle's structure is such that every guess is quite independent of the others - if a guess is valid on its own, its always valid inside a game and vice-versa. This signals that one clean structure for the circuit is to make an individual region for each guess.
-
-With this one region per guess construction, let's think about what checks are necessary for each guess:
-
-- The guess must be an English word of 5 letters
-- If the grid box at a spot is green, the letter at the corresponding spot of the guess must match the solution's letter
-- If a grid box is _not_ green, the letter in the guess at the corresponding spot must _not_ match the solution's letter
-- Similar checks follow if the grid box is yellow (and if it is not yellow)
-
-### English word
-
-Typically, in an R1CS circuit, you would make the check for a guess being a dictionary word a Merkle proof: You would make a Merkle tree of all the words in the dictionary and witness the Merkle path of your guess in the tree[^3]. In PLONK/Halo 2 however, you have the added unlock of lookup tables! While it's not particularly efficient to use lookup tables this way (since your circuit will now have 12000+ rows), it is a cool way to make use of the feature, and I wanted to get more familiar with the API so I decided to try this out.
-
-[^3]: Alternately, [you can tightly pack polynomial hashes of words in field elements 🥲](https://github.com/nalinbhardwaj/wordlines)
-
-### Green
-
-Precisely, this check is: for each slot of the grid, if the slot is green, compare the letters at that slot in the guess and the solution. They should be equal.
-
-### Not green
-
-This check is: for each slot of the grid, if the slot is _not_ green, compare the letters at that slot in the guess and the solution. They should _not_ be equal. In other words, the difference of the letters at that slot should be non-zero. We'll use this reformulation later.
-
-### Yellow and not yellow
-
-The check for yellow color works almost the same way: Instead of comparing the letters at the exact slot, the comparison is just replaced by a giant OR on all possible pairings of the guess letter with letters of the solution.
-
-Let's ignore the yellow color boxes for now and just try to lay the intermediate variables out in one region of the spreadsheet, considering only the green boxes:
-
-![image](https://user-images.githubusercontent.com/6984346/178804579-436cf1ca-c4c3-488f-8743-95ad4cd93473.png)
-
-Consider the witness trace of this circuit: We start with the guess (the first row) and the final solution (the second row) and go through a few intermediate computations to obtain the expected value of green boxes. `diff_green`, the third row, is the difference between the letters at the corresponding slots of the solution and the guess (for instance, slot 2, "U" - "L" = 9). Next, to do the two aforementioned green checks, we need to additionally know "is `diff_green` zero?". This'll live in the next row, and finally, we'll have a copy of the output green grid boxes from the instance in the last row to compare with our expected value. Finally, we'll add another column to our spreadsheet that'll just contain the hash of the letters of the guess. This is so we can check the lookup table for the guesses' validation with a single lookup.
-
-Now that we have a high-level intuition for what our circuit should "do", let's figure out how to actually _code_ this and constrain the circuit with Halo 2.
-
-# API
-
-Fundamentally, the Halo 2 API is a way to write functions (or formulas if you will) on the abstraction of the underlying spreadsheet data structure. Since we can't populate each cell and hand wire each constraint by hand, we need a programmatic layer to do this for us.
-
-The Halo 2 library splits this circuit programming into a 2 pass structure: in the first pass, you decide on and assign all the constraints and logical gates that each region/row/cell must abide by. The second pass is assignment/witness generation: you populate values into this spreadsheet and "instantiate" it.[^4]
-
-While I've already mentioned some details of the idea of regions before, a lot of the Halo 2 library is wrapping these regions into tight APIs that reduce programmer overhead. Besides regions that act as locality constructions in the spreadsheet, another accompanying concept introduced by the Halo 2 API is that of **rotation**. Imagine that you are *processing* the spreadsheet row by row, top to bottom. The rotation is just a way to express a row relative to the current row. So the current row is the current "rotation" in this sequential process, the row just above is the "-1" (or "previous") rotation and so forth.
-
-Now, let's pick off our circuit design in the previous section and use the Halo 2 library to codify it:
-
-First, let's make a list of constraints/checks we'll want to add to the spreadsheet:
-
-- The first row (containing the guess) should be an English word (this'll take a lookup check) and we should additionally constrain that the hash of the guess matches the letters in the other columns.
-- The second row has no checks
-- The third row should check the difference of the corresponding spot on the first two rows matches the difference expressed in this row.
-- The fourth row should check that the spots take value 1 only if the row above is zero. This is a rather complicated check - the Halo 2 API allows for a weak abstraction known as a "chip" that allows you to compose smaller sub checks a bit more easily. A chip is really just a fancy word for a "sub" circuit setting up its own gates and witness assignment and being "callable" from a larger circuit.
-- Finally, the final row simply needs to check if this spot is 1, the third row must be 0 or if it is 0, the fourth row must be 1.
-
-Now, instantiation and filling in the witness is simply a matter of inputting values according to the mentioned rules.
-
-Ultimately, we have a clean 5 row, 7 column region that asserts everything necessary for one guess. We just repeat 6 of these for each of the possible user guesses to obtain our entire circuit!
-
-Some other miscellaneous notes/thoughts about the Halo 2 API I couldn't fit elsewhere:
-
-- One quirk of the Halo 2 API is that while advice columns are referred to by offset rotations, the instance columns are referred to by absolute row numbers, which adds to some confusion. But this is mostly a function of these instance columns being entirely independent of the regions abstraction.
-- Note that the spreadsheet model of layouting is a very intentional choice of the Halo 2 Library. There are many other ways to model ZK circuits while still using them with PLONKish arithmetisation. For instance, Yi Sun/Jonathan Wang from the learning group used only a single column to write their circuit (the [halo2wrong](https://github.com/privacy-scaling-explorations/halo2wrong/blob/master/ecdsa/src/ecdsa.rs) repo does something similar) primarily to reduce verification cost and simplify cost-modelling. On the other hand, Circom developers are planning to stick to the R1CS-like circuit layout structure but just add the ability to define [custom gates](https://github.com/iden3/circom/pull/67) using PLONK. Ultimately, I personally think the generalised many-row many-column spreadsheet-like structure is the most flexible representation amongst these, but there are definitely tradeoffs in ease-of-use vs powerfulness to be explored.
-- I love the detail and care put into debug info for the Halo 2 library. Coming from circom-land (where debugging detail is _quite_ lacking to say the least), Halo 2's debugging hand-holding was a breath of fresh air. :)) And I love the little parrot! 🦜
-
-<img width="411" alt="image" src="https://user-images.githubusercontent.com/6984346/178801659-fd532672-e03e-42e6-945f-4c1ac502da1b.png">
-
-
-[^4]: Sidenote that soundness/under-constraining bugs in this Halo 2 model essentially lie at the margin of the difference of these two passes. This is a useful fact to keep in mind as a circuit writer.
-
-
-# WASM Port
-
-**The [Halo 2 documentation now has a WASM Guide](https://zcash.github.io/halo2/user/wasm-port.html) based on Zordle.**
-
-Halo 2 is written in Rust and is currently only used by Zcash in their daemon software that runs on metal. As application developers, however, we wanted our circuits to prove and verify in web apps. Pulling together a WASM port of Halo 2 proving and verification was quite non-trivial. Original, my project was a CLI-based Wordle but based on [Uma](https://twitter.com/pumatheuma)'s work on running Halo 2 prover and verifier in-browser, we ported the JS prototype to a React/TS friendly library and further discovered some speedup and memory utilisation tricks to make the Wordle circuit work in browser in a reasonable time frame. These tricks include [Blaine](https://twitter.com/BlaineBublitz)'s discovery of esoteric flags required to [bump up available memory for a Rust ported WebAssembly worker from a random GitHub issue](https://github.com/rustwasm/wasm-bindgen/issues/2498#issuecomment-801494135) and precomputing params and serving them as static files to the Rust WASM. All of these tricks are rolled into a [small test-client](https://github.com/nalinbhardwaj/zordle/tree/main/test-client) that might be helpful to future Halo WASM porters. :)
-
-Feel free to hit me up if you have thoughts on any of the notes in this README, many of these are half-baked thoughts and ideas I'd like to flesh out :))
-
-Thanks to 0xPARC for hosting the learning group and to the 0xPARC community for discussions, reading drafts of this README and everything in between.
+		let range_check = |range: usize, value: Expression<F>| {
+			assert!(range > 0);
+			(1..range).fold(Expression::Constant(F::ONE), |expr, i| {
+				expr * (Expression::Constant(F::from(i as u64)) - value.clone())
+			})
+		};
+
+		constraints.push(q.clone() * range_check(28, value.clone()));
+	}
+	constraints
+});
+```
+原始代码处使用`.fold(value.clone()...)`，但我认为不太妥当，因为如果当value值为0的话，这个约束总是满足就达不到约束的效果，所以我将其修改为`Expression::Constant(F::ONE)`。
+
+“poly hashing check”约束用于计算`poly_hash`和输入的words结果的一致性。
+
+“diff_g checker”约束用于确保`diff_g`行的数据确实是由用户输入的字母和真实结果相减的差。
+
+“diff_y checker”的检查和“diff_g checker”十分相似，但因为是检查yellow项，要比green检查略微复杂一点。要将每个字母都和final_char做差，所以是嵌套迭代。如果差为0，那么就说明找到这个字母，因为只需要找到一个就可以了，所以是用乘积关系，保证总体乘积是0。直观解释可能略微苍白，代码比较清晰的展示这一点。
+```rust
+meta.create_gate("diff_y checker", |meta| {
+	let q = meta.query_selector(q_diff_y);
+	let mut constraints = vec![];
+	for i in 0..WORD_LEN {
+		let char = meta.query_advice(chars[i], Rotation(-3));
+		let diff_y = meta.query_advice(chars[i], Rotation::cur());
+
+		let yellow_check = {
+			(0..WORD_LEN).fold(Expression::Constant(F::ONE), |expr, i| {
+				let final_char = meta.query_advice(chars[i], Rotation(-2));
+				expr * (char.clone() - final_char)
+			})
+		};
+		constraints.push(q.clone() * (yellow_check - diff_y));
+	}
+
+	constraints
+});
+```
+
+"diff_color_is_zero checker"约束稍微复杂一点，一般的create_gate一次定义的时候只会有一个约束项起作用，但是这个create_gate定义的时候同时有多个约束项会起作用。
+```rust
+self.q_diff_green_is_zero.enable(&mut region, 4)?;
+self.q_color_is_zero.enable(&mut region, 4)?;
+self.q_diff_yellow_is_zero.enable(&mut region, 5)?;
+self.q_color_is_zero.enable(&mut region, 5)?;
+
+meta.create_gate("diff_color_is_zero checker", |meta| {
+	let q_green = meta.query_selector(q_diff_green_is_zero);
+	let q_yellow = meta.query_selector(q_diff_yellow_is_zero);
+	let q_color_is_zero = meta.query_selector(q_color_is_zero);
+	let mut constraints = vec![];
+
+	for i in 0..WORD_LEN {
+		let diff_color_is_zero = meta.query_advice(chars[i], Rotation::cur());
+
+		constraints.push(q_color_is_zero.clone() * (diff_color_is_zero - (q_green.clone() * diffs_green_is_zero[i].expr() + q_yellow.clone() * diffs_yellow_is_zero[i].expr())));
+	}
+
+	constraints
+});
+```
+仔细看代码，首先要解决的问题是`Rotation::cur()`到底在哪一行的问题，特别是这些约束项并不完全在同一行起作用。
+
+我刚研究这段代码的时候也烦糊涂，事实上答案是`Rotation::cur()`既在第四行，又在第五行。这是一种电路设计技巧，如果你对此觉得疑惑，可以想象我实际写了2个`create_gate`，将其拆分的话是不是就不存在`Rotation::cur()`到底在哪一行的问题？那么上面这段代码只是把两个近乎一样的`create_gate`放在一起了而已。
+
+为什么可以放在一起呢？因为`q_selector`这样的约束项要么值是1要么值是0，如果这一项的值为0，那么这个约束本身也不起作用。当`Rotation::cur()`在第四行的时候，第五行的`q_yellow`项就是0，那么此时整个约束项就简化成了
+```rust
+q_color_is_zero.clone() * (diff_color_is_zero - q_green.clone() * diffs_green_is_zero[i].expr())
+```
+本来结果也就没有第五行任何事情，所以并不需要担心各个约束项不在同一行。
+
+约束式中`diffs_green_is_zero[i].expr()`是`is_zero`约束，该约束实际上是值的约束。value * value_inv == 1，那么如果把value_inv的值确定了，value的值就应该确定。也就是`diff_g`和`diff_y`的值和`color_is_zero`行对应的值应该有对应关系。
+
+该约束的主要作用是确保`diff_g_is_zero`和`diff_y_is_zero`确实是由`diff_g`和`diff_y`的二值化计算二来。我以`diff_g_is_zero`举例来说明。如果diff_g的结果是0，那么1 - value * value_inv的结果是1，这个时候`diff_g_is_zero`的结果就应该是1。如果diff_g的结果不是0，那么1 - value * value_inv的结果是0。这个时候`diff_g_is_zero`的结果就应该是1。
+
+“color check”也是有两行约束，分析原理同"diff_color_is_zero checker"一样，这里就不做展开说明了。该约束的主要作用是确保`color`和`diff_color`的值相反，和`diff_color_is_zero`值相同。
+
+以上是对约束的全部介绍，也是Zk wordle的核心部分。关于WebAssembly部分，这里就不做展开介绍了。需要注意的是因为该项目使用的是nightly-2022-04-07 toolchain构建，使用最新的wasm无法打包rust代码，需要使用更低版本的wasm，我尝试使用0.10.3构建成功。但是该版本打包出来的js代码结构和最新版本的wasm代码已经有了较大差异，可能不太有足够的学习参考价值。如果对于Rust构建wasm感兴趣的可以参考这篇教程学习：https://rustwasm.github.io/docs/book/introduction.html
