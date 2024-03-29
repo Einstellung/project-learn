@@ -79,7 +79,9 @@ cryptocurrencies = [
 
 这两部分数据都是很容易在链上公开可以查询到的（除了root hash）。交易所很难对这些数据作弊。任何人都可以对比合约中存储的数据和区块链地址上实际数据结果。
 
-![[Pasted image 20240328101002.png]]
+<div align="center">
+<img src="https://github.com/Einstellung/project-learn/assets/26652483/ff196a86-2de7-4c62-a80a-b6235343b054"  width = "900" alt="图片名称" align=center />
+</div>
 
 proof生成目前是由交易所生成，由用户向交易所提交需要验证的关键信息，然后由交易所生成proof返回给用户。用户可以拿着这个proof向智能合约请求，由合约来验证proof。
 
