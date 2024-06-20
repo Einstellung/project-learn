@@ -300,62 +300,38 @@ pub fn build(&mut self, size: usize) -> Permutation<C> {
 举一个实际用陪集计算的例子，令 $k_1=g^1,k_2=g^2$，计算：
 
 $$
-
 \begin{split}
-
 \vec{id}_a &= (1,\omega,\omega^2,\omega^3) &= [1, 10, 100, 91]\\
-
 \vec{id}_b &= (k_1,k_1\omega,k_1\omega^2,k_1\omega^3) &= [2, 20, 99, 81] \\
-
 \vec{id}_c &= (k_2,k_2\omega,k_2\omega^2,k_2\omega^3) &= [4, 40, 97, 61] \\
-
 \end{split}
-
 $$
 
 原始位置向量 $id_{a}, id_{b}, id_{c}$：
 
 
 $$
-
 \begin{array}{c|c|c|c|}
-
 i & id_{a,i} & id_{b,i} & id_{c,i} \\
-
 \hline
-
 0 & 1 & 2 & {\color{green}4} \\
-
 1 & {\color{red}10} & {\color{blue}20} & {\color{green}40} \\
-
 2 & 100 & 99 & {\color{red}97} \\
-
 3 & 91 & 81 & {\color{blue}61} \\
-
 \end{array}
-
 $$
 
 置换后的向量 $\sigma_a, \sigma_b, \sigma_c$：
 
 $$
-
 \begin{array}{c|c|c|c|}
-
 i & \sigma_{a,i} & \sigma_{b,i} & \sigma_{c,i} \\
-
 \hline
-
 0 & 1 & 2 & {\color{green}40} \\
-
 1 & {\color{red}97} & {\color{blue}61} & {\color{green}4} \\
-
 2 & 100 & 99 & {\color{red}10} \\
-
 3 & 91 & 81 & {\color{blue}20} \\
-
 \end{array}
-
 $$
 
 代码中的tag表示的是 $id_{?}$ value 表示的是 $\sigma_{?}$ 。通过`let tag = Tag::from_index(index, &rows);`实际指向的是替换后排列的位置，通过执行陪集运算`let value = cosets[tag.i] * roots[tag.j];`实际上就是将原来位置的陪集数据挪到新排列点上。
@@ -827,8 +803,8 @@ $$
 
 $$
 \begin{split}
-q_L \circ w_a + q_R \circ w_b + q_M\circ(w_a\cdot w_b) + q_C + public\_inputs - q_O\circ w_c \\
-+ \alpha(f(X)z(X) - g(X)z(wX)) + a^2(L_0(X)(z(X)-1))
+q_L \circ w_a + q_R \circ w_b + q_M\circ(w_a\cdot w_b) + q_C + public\_inputs - q_O\circ w_c + \\
+ \alpha(f(X)z(X) - g(X)z(wX)) + a^2(L_0(X)(z(X)-1))
 \end{split}
 $$
 
@@ -856,8 +832,8 @@ let openings = [a, b, c].map(|poly| {
 
 $$
 \begin{split}
-q_L \circ \bar{w}_a + q_R \circ \bar{w}_b + q_M\circ(\bar{w}_a\cdot \bar{w}_b) + q_C + public\_inputs - q_O\circ bar{w}_c \\
-+ \alpha(f(X)\bar{z}(X) - g(X)\bar{z}(wX)) + a^2(L_0(X)(\bar{z}(X)-1))
+q_L \circ \bar{w}_a + q_R \circ \bar{w}_b + q_M\circ(\bar{w}_a\cdot \bar{w}_b) + q_C + public\_inputs - q_O\circ \bar{w}_c + \\
+\alpha(f(X)\bar{z}(X) - g(X)\bar{z}(wX)) + a^2(L_0(X)(\bar{z}(X)-1))
 \end{split}
 $$
 
