@@ -1,0 +1,21 @@
+[workspace]
+
+members = [
+    "plonk",
+    "kgz",
+    "permutation"
+]
+
+resolver = "2"
+
+[package]
+name = "workspace-root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+plonk = { path = "plonk" }
+
+[[bin]]
+name = "workspace-root"
+path = "src/main.rs"
