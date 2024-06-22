@@ -463,7 +463,7 @@ fn binary_operation(&self, rhs: &Self, operation: GateOperation) -> Self {
 }
 ```
 
-有了advice的 $W$ 矩阵之后，对advice数据做进一步处理。下述代码首先删除没列的最后3行dummy项，随后添加3个随机项再生成插值多项式。这样做的意义是进一步提供 $W$ 矩阵或者说由 $W$ 矩阵生成的插值多项式安全性，防止秘密信息被破解。
+有了advice的 $W$ 矩阵之后，对advice数据做进一步处理。下述代码首先删除每列的最后3行dummy项，随后添加3个随机项再生成插值多项式。这样做的意义是进一步提供 $W$ 矩阵或者说由 $W$ 矩阵生成的插值多项式安全性，防止秘密信息被破解。
 
 ```rust
 let advice = advice
@@ -580,7 +580,17 @@ fn prove<const I: usize, C: CircuitDescription<I>>(
 }
 ```
 
-该函数首先对advice的3个插值多项式生成对应的commitments。随后对advice多项式在domain上的多个点做evaluate。之所以要提前做evaluate是为了计算下式做准备
+该函数首先对advice的3个插值多项式生成对应的commitments。还要根据该commitments生成对应 $\beta$ 和 $\gamma$ 的challenge。
+
+随后对advice多项式在domain上的多个点做evaluate（也就是在 $[w^0, w^1, w^2, ...]$ 做evaluate）。
+
+```rust
+let values = advice
+        .clone()
+        .map(|e| e.evaluate_over_domain(*domain).evals.to_vec());
+```
+
+之所以要提前做evaluate是为了计算下式做准备。
 
 $$
 \begin{split}
@@ -639,7 +649,7 @@ impl<const C: usize> Iterator for ColIterator<C> {
 
 该函数首先对acc做new处理之后转换成迭代器。这样可以重写next方法来控制迭代器的行为。将按列迭代，转换成 $W_?(X)$ 的值以及permutation重新排列的值在一起按行迭代。这样在`acc.scan(Fr::one(), |state, vals|`的每一次运算实际上都是在计算 $\frac{f(X)}{g(X)}$ 的累乘。
 
-将 $\frac{f(X)}{g(X)}$ 第一项的值设置为1，后面最后一项累乘的结果应该也是1。刚好和第一项的值重合，可以把最后一项删掉，所以在prove函数中有`evals.pop();`。
+将 $\frac{f(X)}{g(X)}$ 第一项的值设置为1，后面最后一项累乘的结果应该也是1。刚好和第一项的值重合，可以把最后一项删掉，所以在prove函数中有`evals.pop();`。`let mut evals = circuit.copy_constrains.prove(&values, beta, gamma);` evals是acc在domain上的y值组成的数组。
 
 之前计算已经得到了acc，acc(w*\x)  就只是最后一项为1，所以只需要`evals_shifted.rotate_left(1);`就可以得到acc(w*\x)。
 
@@ -650,7 +660,11 @@ z_{i+1} &= z_i\cdot \frac{f_i(X)}{g_i(X)}
 \end{split}
 $$
 
-之前的计算已经得到acc，acc(w*\x) 的y值，那么很容易就可以插值出对应的多项式。
+之前的计算已经得到acc，acc(w*\x) 的y值，那么很容易就可以插值出对应的多项式。用`acc`和`acc_shift`表示。对acc多项式可以计算一下对应的commitment，`let commitment = scheme.commit(&acc);`。
+
+把acc的commitment添加到challenge数组里面，现在W矩阵的commitment和acc的commitment一起组成新的challenge所需的commitment。用这个新的challenge生成 $\alpha$ 和 $\zeta$ ，其中 $\zeta$ 命名为`evaluation_point`，将会作为整体多项式打开的评估点。`let [alpha, evaluation_point] = challenge_generator.generate_challenges();`
+
+public多项式在 $\zeta$ 点打开。`let public_eval = public_inputs_poly.evaluate(&evaluation_point);`
 
 接下来计算商多项式。
 
@@ -752,13 +766,13 @@ $$
 line2计算的是`*advice + &rhs`也就是
 
 $$
-w_i + \gamma + \beta \cdot coset_i
+w_i + \gamma + \beta \cdot coset_i \cdot x
 $$
 
 随后再连乘起来即
 
 $$
-(w_a + \gamma + \beta \cdot coset_1)(w_b + \gamma + \beta \cdot coset_2)(w_c + \gamma + \beta \cdot coset_3)z(X)
+(w_a + \gamma + \beta \cdot coset_1 \cdot x)(w_b + \gamma + \beta \cdot coset_2 \cdot x)(w_c + \gamma + \beta \cdot coset_3 \cdot x)z(x)
 $$
 
 接着对permutation做处理，针对 $\sigma$ 向量生成对应3个插值多项式。
@@ -766,7 +780,7 @@ $$
 line3是
 
 $$
-(w_a + \gamma + \beta \cdot \sigma_a(x))(w_b + \gamma + \beta \cdot \sigma_b(x))(w_c + \gamma + \beta \cdot \sigma_c(x))z(wX)
+(w_a + \gamma + \beta \cdot \sigma_a(x))(w_b + \gamma + \beta \cdot \sigma_b(x))(w_c + \gamma + \beta \cdot \sigma_c(x))z(wx)
 $$
 
 这段代码来保证运算确实有相等性
@@ -808,37 +822,64 @@ q_L \circ w_a + q_R \circ w_b + q_M\circ(w_a\cdot w_b) + q_C + public\_inputs - 
 \end{split}
 $$
 
-然后除以消失多项式，可以算出对应的商多项式。
+然后除以消失多项式，可以算出对应的商多项式t。t会拆分成 $t_{low}(x)$ $t_{mid}(x)$ $t_{high}(x)$ 
 
 继续回到prove函数。
 
-之前的构造函数有多个地方是多项式相乘的形式，可以在评估点提前将部分多项式提前打开，来简化计算。所以可以提前计算 $[ w_a, w_b, w_c ]$ 的评估点 $[ \bar{w}_a, \bar{w}_b, \bar{w}_c ]$
-这段代码就是做该事情
+因为verifier要自己构造对应的challenge点，所以提前要把一些commitment做准备工作传过去，比如W矩阵。
 
 ```rust
 let openings = [a, b, c].map(|poly| {
-            let commitment = commitments.next().unwrap();
-            let opening = scheme.open(poly, evaluation_point);
-            PolyProof {
-                commitment,
-                opening,
-            }
-        });
+	let commitment = commitments.next().unwrap();
+	let opening = scheme.open(poly, evaluation_point);
+	PolyProof {
+		commitment,
+		opening,
+	}
+});
+
+let [a, b, c] = openings;
 ```
 
-与此同时，还对`z(x)`和`z(w*x)` 打开。
+表示在 $\zeta$ 点打开的值还有对应的commitment。
+
+之前的构造函数有多个地方是多项式相乘的形式，可以在评估点提前将部分多项式提前打开，来简化计算。所以可以提前计算 $[ w_a, w_b, w_c ]$ 在 $\zeta$ 点的评估点 $[ \bar{w}_a, \bar{w}_b, \bar{w}_c ]$
+
+与此同时，还对`z(x)`和`z(w*x)` 以及public。
 
 随后进入`linearisation_poly`函数。计算的结果是
 
 $$
 \begin{split}
-q_L \circ \bar{w}_a + q_R \circ \bar{w}_b + q_M\circ(\bar{w}_a\cdot \bar{w}_b) + q_C + public\_inputs - q_O\circ \bar{w}_c + \\
-\alpha(f(X)\bar{z}(X) - g(X)\bar{z}(wX)) + a^2(L_0(X)(\bar{z}(X)-1))
+linear = q_L \circ \bar{w}_a + q_R \circ \bar{w}_b + q_M\circ(\bar{w}_a\cdot \bar{w}_b) + q_C + \bar{public}\_inputs - q_O\circ \bar{w}_c + \\
+\alpha(f(\zeta){z}(X) - g(\zeta){z}(wX)) + a^2(L_0(\zeta)(\bar{z}(X)-1)) - t \cdot z_H(\zeta)
 \end{split}
 $$
 
-随后在评估点将其值打开。以及一些其他的评估点，一起作为proof发送给verifier。
+其中 $f(\zeta)=(\bar{w}_a + \gamma + \beta \cdot coset_1 \cdot \zeta)...$，$g(\zeta)$ 同理(不过代码实际不是在 $g(\zeta)$ 完全打开，而是在a和b打开，c保留成多项式的形式，同时在 $z(w\zeta)$ 打开)。
+
+随后在评估点 $\zeta$ 将linear值打开（将计算结果命名为r）。以及一些其他的评估点，一起作为proof发送给verifier。`let t = quotient.commit(&scheme);`是对之前的 $t_{low}(x)$ $t_{mid}(x)$ $t_{high}(x)$ 每一个都生成一个commitment。
 
 ## Verify
 
-verify的代码和proof的原理十分类似，就不具体单独解释了。verify的原理部分见[这里](https://github.com/Einstellung/project-learn/blob/main/plonk/plonk-intro-notebook/4-plonk-constraints.ipynb)
+verify的代码和proof的原理十分类似，首先和prove的方式一致的构造出一些challenge点，这里用到commitment也是为什么要把commitment传下来的原因。
+
+函数之前做一些数据准备工作，接下来进入`let (advice, acc) = match verify_openings(proof, scheme, domain.element(1)) {`，在该函数（`verify_openings`）中，
+
+```rust
+let valid = advice.iter().all(|proof| {
+	let PolyProof {
+		commitment,
+		opening,
+	} = proof;
+	scheme.verify(commitment, opening, evaluation_point)
+});
+```
+
+verify的作用是来验证opening P(z) = y，就是实际构造一个多项式承诺的验证，确保承诺的数据确实是对应的数据而不是修改成的别的值，opening里面有两个数据，一个是f(s)，另外一个是h(s)，所以是可以构造出来一个多项式承诺的验证的。该段代码的作用是验证W矩阵的commitment确实是来自proof多项式计算的值，而不是另外专门生成可以欺骗verifier的。随后对z(x)和z(xw)也做同样的事情，最后返回在open点的评估值，`(advice, acc)`advice对应a，b，c。acc对应z(x)和z(xw)。
+
+随后进入`linearisation_commitment`函数，该函数的作用是构造linear函数的commitment，之前已经proof有了评估点 $\zeta$ 将linear值打开（将计算结果命名为r），现在有了commitment之后就做多项式承诺的验证工作。
+`let open_valid = scheme.verify(&r, &r_opening, eval_point);`来验证绑定关系是成立的。具体来看一下代码
+
+代码构造方式同proof环节的`linearisation_poly`是一致的，所不同的是最后proof回使用 $\zeta$ 作为评估点生成 $f(\zeta)$ ，此处会使用srs作为评估点，生成commitment。为什么这个式子计算的时候还是绑定诸如 $\bar{w}_a$ 这些点明明是在 $\zeta$ 评估的，而不是在srs，把它视为一个点而不是参与运算的多项式会更好一点，这样的点用于计算可以起到多项式绑定的效果。
+
