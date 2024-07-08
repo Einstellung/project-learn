@@ -470,9 +470,10 @@ $$
 
 完整的协议请参考Plonkup论文 [2]。
 
- $\zeta$ 打开点在下式子中打开
+$\zeta$ 打开点在下式子中打开
 
-$$
+
+```math
 \begin{align*}
 r(X) &= ... \\
 &\quad + \alpha^3 q_{K} (X) (\bar{w}_a(\zeta)+\eta \bar{w}_b(\zeta)+\eta^2 \bar{w}_c(\zeta)-\bar{f}(\zeta))) \\
@@ -480,8 +481,11 @@ r(X) &= ... \\
 &\quad + \alpha^5 \bar{L}_0 (\zeta) (z'(X) - 1)  \\
 &\quad - \bar{z}_H (\zeta) (q_{low} (X) + \zeta^{n+2} q_{mid} (X) + \zeta^{2n+4} q_{high} (X))
 \end{align*}
-$$
+```
+
+
 其中
+
 
 $$
 \begin{align*}
@@ -491,12 +495,13 @@ g_4(X) &= \Big({\color{blue}s^{even}(X)}+\beta_2\cdot {\color{blue}\bar{s}^{odd}
 \end{align*}
 $$
 
+
 后续要算r(s)的值，也就是在非提前打开部分提供对应的commitment。q，z，s_even都是verifier不知道的，需要prover提供对应的commitment。t是公开的，verifier可以自己算。关于open 的zeta的值，z_h，t相关，L_0，verifier可以自己算，其他的一些在zeta的open点也需要prover提供过来（f，z_w, s_odd, s_even_w）。之后verifer算完r(s)，prover提供r(zeta)，还有h(s)，然后verifier就可以用多项式承诺做最后的验证。
 
 
 ## Reference
 
-- [x] Ariel Gabizo, Dmitry Khovratovich. flookup: Fractional decomposition-based lookups in quasi-linear time independent of table size. https://eprint.iacr.org/2022/1447.
+- [1] Ariel Gabizo, Dmitry Khovratovich. flookup: Fractional decomposition-based lookups in quasi-linear time independent of table size. https://eprint.iacr.org/2022/1447.
 
 - [2] Luke Pearson, Joshua Fitzgerald, Héctor Masip, Marta Bellés-Muñoz, and Jose Luis Muñoz-Tapia. PlonKup: Reconciling PlonK with plookup. https://eprint.iacr.org/2022/086.
 
