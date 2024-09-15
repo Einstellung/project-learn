@@ -46,7 +46,8 @@ fn new(
 
 其中context表示将来在实际执行transition constraint的时候其上下文应该什么样子的。对于`simple_fibonacci`而言，其形式如下图所示
 
-![[Pasted image 20240906200819.png]]
+![Pasted image 20240906200819](https://github.com/user-attachments/assets/81780502-f7ba-4738-8d5d-0d68e9948151)
+
 
 表的前两个数据是boundary constraint，所以要做`transition_exemption`。因为transition constraint需要3个数据才能表示，所以`transition_offsets`是3。
 
