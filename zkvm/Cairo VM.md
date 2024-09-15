@@ -86,7 +86,8 @@ y值是提前在外部算出来的（花括号表示的地方），然后在Cari
 
 一个segment结构样子会是这样的，segment用s:t标识，前者表示哪一个segment，后者表示的是第几个位置。
 
-![[Pasted image 20240820174739.png]]
+![Pasted image 20240820174739](https://github.com/user-attachments/assets/34245a7b-e780-453f-bebc-6557d59764d0)
+
 
 实际上我们只有一块内存，图片中标识的好像是有两块但实际上只是为了表示方便，因为memory设计是`ap`只能不停向前不能后退也不能更改之前的值，那么新加的一个数组添加完之后再想回到原来的`ap`执行之前的数组的值就会占据一段内容，对于上述图片来讲，大概就是
 
@@ -102,7 +103,8 @@ seg1:[a, b, (1:4), ...] + seg2: [x, y]
 
 重新排列之后的划分大概可以表示成这样
 
-![[Pasted image 20240820175856.png]]
+![Pasted image 20240820175856](https://github.com/user-attachments/assets/b96777bc-44e1-4443-8fc3-2df9af2c2dfa)
+
 
 其中user segment这里就是用户定义的数据或者数据结构，比如之前的那个设置的array `[x, y]`
 
@@ -142,7 +144,8 @@ x = read(address=20)
 
 instruction在内存中存储的单元称之为word。每个word的大小是63bit。通常情况下一个instruction包含两部分，指令本身以及operand（如果有的话），指令本身会存储在第一个word，而operand的值会存在第二个（如果更多operand会放在第三个等等）位置。也就是说第二个word会存value，第一个word会存指令。
 
-![[Pasted image 20240821164011.png]]
+![Pasted image 20240821164011](https://github.com/user-attachments/assets/b55e2f6b-cc3d-4dac-9027-351e4515289b)
+
 
 还是要对这个表做详细一点的理解。
 
